@@ -1,6 +1,6 @@
 package com.opensstp.android
 
-import android.app.Activity
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -16,6 +16,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Toast
 import android.widget.TextView
 import android.widget.ScrollView
 import androidx.activity.ComponentActivity
@@ -23,6 +24,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private lateinit var server: EditText
@@ -31,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var remember: CheckBox
     private lateinit var status: TextView
     private lateinit var connectButton: Button
+    private lateinit var configList: LinearLayout
     private var sessionCanBeStopped = false
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -70,19 +74,43 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(24), dp(28), dp(24), dp(24))
             setBackgroundColor(Color.rgb(13, 18, 28))
         }
-        root.addView(TextView(this).apply {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        header.addView(TextView(this).apply {
             text = "Open-SSTP"
             textSize = 25f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.RIGHT
-        }, match())
+            gravity = Gravity.LEFT or Gravity.CENTER_VERTICAL
+        }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        val addConfigButton = Button(this).apply {
+            text = "＋"
+            textSize = 27f
+            isAllCaps = false
+            contentDescription = "افزودن کانفیگ"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(46, 119, 235))
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        header.addView(addConfigButton, LinearLayout.LayoutParams(dp(56), dp(48)))
+        root.addView(header, match())
         root.addView(TextView(this).apply {
             text = "SOFTETHER VPN FOR ANDROID"
             textSize = 15f
             setTextColor(Color.rgb(155, 170, 190))
             gravity = Gravity.RIGHT
         }, params(top = 6))
+
+        configList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        root.addView(configList, params(top = 12))
+        renderConfigs(prefs)
+        addConfigButton.setOnClickListener { promptSaveConfig(prefs) }
 
         server = field("VPN Gate hostname or IP[:port]")
             .apply { setText(prefs.getString("server", "")) }
@@ -158,7 +186,14 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(scroll)
         remember.setOnCheckedChangeListener { _, checked ->
-            if (!checked) prefs.edit().clear().apply()
+            if (!checked) {
+                prefs.edit()
+                    .remove("server")
+                    .remove("username")
+                    .remove("password")
+                    .putBoolean("remember", false)
+                    .apply()
+            }
         }
 
         connectButton.setOnClickListener {
@@ -232,6 +267,129 @@ class MainActivity : ComponentActivity() {
         )
         // While connecting, keep the form editable; the native service validates server/port.
         connectButton.isEnabled = true
+    }
+
+    private fun promptSaveConfig(prefs: android.content.SharedPreferences) {
+        val serverValue = server.text.toString().trim()
+        if (serverValue.isBlank()) {
+            server.error = "اول آدرس سرور را وارد کنید"
+            Toast.makeText(this, "آدرس سرور را وارد کنید و دوباره + را بزنید.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val nameInput = EditText(this).apply {
+            hint = "مثلاً سرور شخصی"
+            setSingleLine(true)
+            setText("کانفیگ ${readConfigs(prefs).length() + 1}")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("افزودن کانفیگ")
+            .setMessage("اطلاعات فعلی سرور، نام کاربری و رمز عبور ذخیره می‌شود.")
+            .setView(nameInput)
+            .setNegativeButton("انصراف", null)
+            .setPositiveButton("ذخیره") { _, _ ->
+                val configName = nameInput.text.toString().trim()
+                if (configName.isBlank()) {
+                    Toast.makeText(this, "برای کانفیگ یک نام وارد کنید.", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val configs = readConfigs(prefs)
+                val item = JSONObject()
+                    .put("name", configName)
+                    .put("server", serverValue)
+                    .put("username", username.text.toString().trim())
+                    .put("password", password.text.toString())
+                var replaced = false
+                for (i in 0 until configs.length()) {
+                    if (configs.optJSONObject(i)?.optString("name") == configName) {
+                        configs.put(i, item)
+                        replaced = true
+                        break
+                    }
+                }
+                if (!replaced) configs.put(item)
+                prefs.edit().putString("configs_json", configs.toString()).apply()
+                renderConfigs(prefs)
+                Toast.makeText(this, "کانفیگ «$configName» ذخیره شد.", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun readConfigs(prefs: android.content.SharedPreferences): JSONArray {
+        return try {
+            JSONArray(prefs.getString("configs_json", "[]") ?: "[]")
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+
+    private fun renderConfigs(prefs: android.content.SharedPreferences) {
+        if (!::configList.isInitialized) return
+        configList.removeAllViews()
+        val configs = readConfigs(prefs)
+        if (configs.length() == 0) return
+
+        configList.addView(TextView(this).apply {
+            text = "کانفیگ‌های ذخیره‌شده"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(190, 205, 225))
+            gravity = Gravity.RIGHT
+        }, params())
+
+        for (i in 0 until configs.length()) {
+            val item = configs.optJSONObject(i) ?: continue
+            val configName = item.optString("name", "کانفیگ ${i + 1}")
+            val configServer = item.optString("server", "")
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                setPadding(dp(10), dp(4), dp(4), dp(4))
+                setBackgroundColor(Color.rgb(24, 32, 46))
+            }
+            val loadButton = Button(this).apply {
+                text = "$configName\n$configServer"
+                isAllCaps = false
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.TRANSPARENT)
+                gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+                setOnClickListener {
+                    server.setText(item.optString("server", ""))
+                    username.setText(item.optString("username", "vpn"))
+                    password.setText(item.optString("password", ""))
+                    Toast.makeText(this@MainActivity, "کانفیگ «$configName» انتخاب شد.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            row.addView(loadButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val deleteButton = Button(this).apply {
+                text = "×"
+                textSize = 20f
+                isAllCaps = false
+                setTextColor(Color.rgb(255, 130, 130))
+                setBackgroundColor(Color.TRANSPARENT)
+                contentDescription = "حذف $configName"
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setMessage("کانفیگ «$configName» حذف شود؟")
+                        .setNegativeButton("انصراف", null)
+                        .setPositiveButton("حذف") { _, _ ->
+                            val current = readConfigs(prefs)
+                            val updated = JSONArray()
+                            for (j in 0 until current.length()) {
+                                val entry = current.optJSONObject(j) ?: continue
+                                if (entry.optString("name") != configName) updated.put(entry)
+                            }
+                            prefs.edit().putString("configs_json", updated.toString()).apply()
+                            renderConfigs(prefs)
+                        }
+                        .show()
+                }
+            }
+            row.addView(deleteButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+            configList.addView(row, params(top = 6))
+        }
     }
 
     private fun securePrefs() = EncryptedSharedPreferences.create(
