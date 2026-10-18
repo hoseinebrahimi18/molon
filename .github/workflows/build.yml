@@ -1,0 +1,164 @@
+name: Build OpenSSTP Windows with bundled SoftEther engine
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'OpenSSTP-Windows/**'
+      - '.github/workflows/build.yml'
+      - 'README-GITHUB-ACTIONS-fa.md'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout OpenSSTP
+        uses: actions/checkout@v4
+
+      - name: Checkout SoftEther source (with required submodules)
+        uses: actions/checkout@v4
+        with:
+          repository: SoftEtherVPN/SoftEtherVPN
+          ref: master
+          path: vendor/SoftEtherVPN
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Prepare vcpkg
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'C:\vcpkg\scripts\buildsystems\vcpkg.cmake')) {
+            git clone https://github.com/microsoft/vcpkg C:\vcpkg
+            & C:\vcpkg\bootstrap-vcpkg.bat
+          }
+
+      - name: Cache SoftEther vcpkg dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor/SoftEtherVPN/build/vcpkg_installed
+          key: softether-vcpkg-x64-${{ hashFiles('vendor/SoftEtherVPN/vcpkg.json') }}
+
+      - name: Initialize Visual Studio C++ environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Locate or install clang-cl
+        shell: pwsh
+        run: |
+          $clang = $null
+
+          # 1) already on PATH?
+          $cmd = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+          if ($cmd) { $clang = $cmd.Source }
+
+          # 2) bundled with any installed Visual Studio?
+          if (-not $clang) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -products * -property installationPath
+              if ($vsPath) {
+                foreach ($rel in @('VC\Tools\Llvm\x64\bin\clang-cl.exe','VC\Tools\Llvm\bin\clang-cl.exe')) {
+                  $p = Join-Path $vsPath $rel
+                  if (Test-Path $p) { $clang = $p; break }
+                }
+              }
+            }
+          }
+
+          # 3) standalone LLVM
+          if (-not $clang) {
+            $p = 'C:\Program Files\LLVM\bin\clang-cl.exe'
+            if (-not (Test-Path $p)) {
+              choco install llvm -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw 'Failed to install LLVM via Chocolatey.' }
+            }
+            if (Test-Path $p) { $clang = $p }
+          }
+
+          if (-not $clang) { throw 'clang-cl could not be found or installed.' }
+          Write-Host "Using clang-cl: $clang"
+          "CLANG_CL=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Ensure Ninja is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja.exe -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to install Ninja via Chocolatey.' }
+            $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+          }
+          ninja --version
+
+      - name: Build SoftEther engine from source
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'vendor/SoftEtherVPN/CMakeLists.txt')) { throw 'CMakeLists.txt not found in SoftEther checkout.' }
+          $compiler = $env:CLANG_CL
+          if (!$compiler -or !(Test-Path $compiler)) { throw "clang-cl was not found at '$compiler'" }
+          $env:CC = $compiler
+          $env:CXX = $compiler
+          Write-Host "WORKFLOW-VERSION=v4  C/CXX compiler: $compiler"
+          cmake -S vendor/SoftEtherVPN -B vendor/SoftEtherVPN/build -G Ninja `
+            '-DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake' `
+            '-DVCPKG_TARGET_TRIPLET=x64-windows-static' `
+            '-DCMAKE_BUILD_TYPE=Release' `
+            '-DBUILD_NUMBER=5188' `
+            "-DCMAKE_C_COMPILER=$compiler" `
+            "-DCMAKE_CXX_COMPILER=$compiler"
+          if ($LASTEXITCODE -ne 0) { throw 'SoftEther CMake configure failed.' }
+          cmake --build vendor/SoftEtherVPN/build --parallel --target vpnclient vpncmd hamcore-archive-build
+          if ($LASTEXITCODE -ne 0) { throw 'SoftEther source build failed.' }
+          Get-ChildItem vendor/SoftEtherVPN/build -File | Select-Object Name,Length
+
+      - name: Bundle only the SoftEther engine (no Client Manager or official installer)
+        shell: pwsh
+        run: |
+          $source = 'vendor/SoftEtherVPN/build'
+          $dest = 'OpenSSTP-Windows/softether-runtime'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach ($name in @('vpnclient.exe','vpncmd.exe','hamcore.se2')) {
+            $file = Join-Path $source $name
+            if (!(Test-Path $file)) { throw "Required SoftEther build output is missing: $file" }
+            Copy-Item $file $dest -Force
+          }
+          Copy-Item 'vendor/SoftEtherVPN/LICENSE' (Join-Path $dest 'SOFTETHER-LICENSE.txt') -Force
+          Remove-Item (Join-Path $dest 'BUILD-OUTPUT-GOES-HERE.txt') -ErrorAction SilentlyContinue
+          @'
+          OpenSSTP bundled SoftEther runtime
+
+          This folder contains only the SoftEther VPN Client service engine (vpnclient.exe),
+          its command-line management utility (vpncmd.exe), and the hamcore.se2 resource archive.
+          It deliberately excludes vpncmgr.exe / Client Manager GUI, vpnsetup.exe, and the VPN Gate
+          Client Plugin user interface. On first connection, OpenSSTP asks for Administrator consent
+          to copy the engine into %ProgramData%\OpenSSTP\SoftEtherRuntime, register a Windows service,
+          and create the SoftEther virtual network adapter. This is a custom engine deployment, not a
+          conventional installation of the SoftEther VPN Client application/GUI.
+
+          The SoftEther source is retrieved from the official SoftEtherVPN/SoftEtherVPN repository
+          and built during this workflow. See SOFTETHER-LICENSE.txt for its license.
+          '@ | Set-Content (Join-Path $dest 'README-runtime-fa.txt') -Encoding UTF8
+
+      - name: Publish OpenSSTP self-contained x64 app
+        shell: pwsh
+        run: |
+          dotnet publish OpenSSTP-Windows/OpenSSTP.Windows.csproj -c Release -r win-x64 --self-contained true -o publish-out
+          if ($LASTEXITCODE -ne 0) { throw 'OpenSSTP publish failed.' }
+          if (!(Test-Path 'publish-out/softether-runtime/vpnclient.exe')) {
+            throw 'Bundled vpnclient.exe was not copied into publish output.'
+          }
+
+      - name: Upload OpenSSTP package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSSTP-Windows-Bundled-SoftEther
+          path: publish-out/
+          if-no-files-found: error

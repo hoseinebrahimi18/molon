@@ -1,1 +1,40 @@
+name: Android SoftEther build
 
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Android-Port/**'
+      - 'scripts/**'
+      - '.github/workflows/android-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  assemble-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Validate Android port wiring
+        run: python3 scripts/validate-android-port.py
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Fetch and prepare native SoftEther module
+        run: ./scripts/bootstrap-softether.sh
+      - name: Compile Android debug APK
+        working-directory: Android-Port
+        run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenSSTP-Android-SoftEther-debug
+          path: Android-Port/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
