@@ -23,8 +23,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Set up command-line tools and accept licenses, but do not pass
-      # a multiline package list to the action's single-string packages input.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
@@ -33,7 +31,6 @@ jobs:
           log-accepted-android-sdk-licenses: false
           packages: ''
 
-      # Pass every SDK package as its own quoted argument.
       - name: Install Android SDK packages
         run: |
           sdkmanager --install \
@@ -50,8 +47,9 @@ jobs:
       - name: Validate Android port wiring
         run: python3 scripts/validate-android-port.py
 
+      # Run through bash so this works even if the executable bit is missing in Git.
       - name: Fetch and prepare native SoftEther module
-        run: ./scripts/bootstrap-softether.sh
+        run: bash ./scripts/bootstrap-softether.sh
 
       - name: Compile Android debug APK
         working-directory: Android-Port
