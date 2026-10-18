@@ -51,6 +51,11 @@ jobs:
       - name: Fetch and prepare native SoftEther module
         run: bash ./scripts/bootstrap-softether.sh
 
+      # The upstream module's OpenSSL submodule contains source headers but no
+      # generated OpenSSL 3 configuration header or Android static libraries.
+      - name: Build OpenSSL for Android ABIs
+        run: bash ./scripts/build-openssl-android.sh
+
       - name: Compile Android debug APK
         working-directory: Android-Port
         run: gradle --no-daemon assembleDebug
