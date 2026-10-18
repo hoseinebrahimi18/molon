@@ -25,11 +25,12 @@ gradle assembleDebug
 
 ```bash
 ./scripts/bootstrap-softether.sh
+./scripts/build-openssl-android.sh
 cd Android-Port
 gradle assembleDebug
 ```
 
-پس از اجرای اسکریپت، یا پوشهٔ `Android-Port` را در Android Studio باز کنید. Android SDK 36، Android NDK و CMake 3.22.1 لازم‌اند. اولین اجرا به اینترنت نیاز دارد تا ماژول بومی و زیرماژول‌های مجوزدار دریافت شوند.
+پس از اجرای اسکریپت، یا پوشهٔ `Android-Port` را در Android Studio باز کنید. Android SDK 36، Android NDK و CMake 3.22.1 لازم‌اند. اولین اجرا به اینترنت نیاز دارد تا ماژول بومی و زیرماژول‌های مجوزدار دریافت شوند. اسکریپت `build-openssl-android.sh` نیز کتابخانه‌های ثابت OpenSSL و هدر پیکربندی تولیدشده را برای ABIهای اندروید می‌سازد.
 
 APK آزمایشی در مسیر زیر ساخته می‌شود:
 

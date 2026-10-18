@@ -18,12 +18,13 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.ScrollView
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private lateinit var server: EditText
     private lateinit var username: EditText
     private lateinit var password: EditText
@@ -151,7 +152,7 @@ class MainActivity : Activity() {
             gravity = Gravity.RIGHT
         }, params(top = 10))
         val scroll = ScrollView(this).apply {
-            fillViewport = true
+            isFillViewport = true
             setBackgroundColor(Color.rgb(13, 18, 28))
             addView(root)
         }
@@ -244,7 +245,7 @@ class MainActivity : Activity() {
     private fun field(hintText: String, isPassword: Boolean = false) = EditText(this).apply {
         hint = hintText
         textSize = 15f
-        singleLine = true
+        isSingleLine = true
         gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
         setTextColor(Color.WHITE)
         setHintTextColor(Color.rgb(120, 137, 160))

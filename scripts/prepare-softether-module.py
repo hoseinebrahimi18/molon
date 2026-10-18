@@ -38,6 +38,26 @@ if test_target_pattern.search(cmake_text):
     cmake.write_text(cmake_text, encoding="utf-8")
     print("Excluded upstream native-test shared library from standard APK builds.")
 
+# The upstream CMake file puts the raw OpenSSL source headers first, but OpenSSL 3.x
+# requires a generated configuration.h. Prefer the ABI-specific installed headers produced
+# by build-openssl-android.sh, while retaining the upstream source headers as fallback.
+cmake_text = cmake.read_text(encoding="utf-8")
+old_include_block = """include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/softether-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/openssl/include
+)"""
+new_include_block = """include_directories(
+    ${OPENSSL_ROOT}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/softether-core/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/openssl/include
+)"""
+if "${OPENSSL_ROOT}/include" not in cmake_text:
+    if old_include_block not in cmake_text:
+        raise SystemExit("Could not patch OpenSSL include order in upstream CMakeLists.txt")
+    cmake_text = cmake_text.replace(old_include_block, new_include_block, 1)
+    cmake.write_text(cmake_text, encoding="utf-8")
+    print("Configured CMake to prefer ABI-specific generated OpenSSL headers.")
+
 # Keep native source and license files intact. The consuming root project supplies the
 # compileSdk/minSdk/targetSdk extra properties expected by this library's original build file.
 print(f"Prepared native SoftEther module at: {root}")
