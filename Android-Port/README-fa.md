@@ -1,0 +1,51 @@
+# انتقال OpenSSTP به Android با ماژول بومی SoftEther
+
+این نسخه رابط سرور/نام کاربری/رمز عبور و گزینهٔ «مرا به خاطر بسپار» را نگه می‌دارد و سرویس واقعی Android `VpnService` را به API بومی ماژول SoftEther وصل می‌کند. کد SSTP پوشهٔ حذف‌شدهٔ `OpenSSTP-Windows/reference` استفاده نمی‌شود.
+
+## معماری اتصال
+
+- `app/src/main/java/com/opensstp/android/MainActivity.kt`: رابط فارسی و ذخیره‌سازی رمزگذاری‌شدهٔ اطلاعات ورود.
+- `SoftEtherVpnService.kt`: اتصال SoftEther، محافظت از سوکت‌های موتور در برابر route شدن داخل خود VPN، دریافت DHCP، ایجاد TUN، حلقهٔ رفت‌وبرگشت بسته‌های IP، قفل بیدارماندن CPU و نرخ لحظه‌ای ارسال/دریافت.
+- `vendor/SoftEther-Android-Module`: وابستگی خارجی بومی؛ در ZIP سورس عمداً کپی نشده و با اسکریپت دریافت می‌شود.
+- `scripts/bootstrap-softether.sh` یا `scripts/bootstrap-softether.ps1`: دریافت سورس ماژول و زیرماژول‌های آن و آماده‌سازی Gradle.
+
+ماژول انتخاب‌شده یک پیاده‌سازی بومی پروتکل SoftEther است که طبق مستندات upstream بر اساس کد مرجع `SoftEtherVPN_Stable` ساخته شده است. این ماژول، فایل اجرایی Windows یعنی `vpnclient.exe` را به Android منتقل نمی‌کند؛ در اندروید از API بومی پروتکل و `VpnService` استفاده می‌شود. این انتخاب به معنی استفاده از SSTP نیست.
+
+## دریافت وابستگی و ساخت
+
+روی ویندوز (PowerShell، با Git و Python نصب‌شده):
+
+```powershell
+.\scripts\bootstrap-softether.ps1
+cd Android-Port
+gradle assembleDebug
+```
+
+روی Linux/macOS:
+
+```bash
+./scripts/bootstrap-softether.sh
+cd Android-Port
+gradle assembleDebug
+```
+
+پس از اجرای اسکریپت، یا پوشهٔ `Android-Port` را در Android Studio باز کنید. Android SDK 36، Android NDK و CMake 3.22.1 لازم‌اند. اولین اجرا به اینترنت نیاز دارد تا ماژول بومی و زیرماژول‌های مجوزدار دریافت شوند.
+
+APK آزمایشی در مسیر زیر ساخته می‌شود:
+
+```text
+Android-Port/app/build/outputs/apk/debug/app-debug.apk
+```
+
+## نکات اتصال
+
+- آدرس سرور می‌تواند `host`، `host:port` یا `[IPv6]:port` باشد؛ پورت پیش‌فرض 443 است.
+- نام Hub در این نسخه `VPNGATE` است تا رفتار قبلی پروژه حفظ شود.
+- وضعیت «متصل» فقط بعد از احراز هویت SoftEther، محافظت از سوکت‌ها، دریافت IP از DHCP و ایجاد موفق TUN نمایش داده می‌شود.
+- اگر DHCP سرور موفق نشود، سرویس fail-closed می‌ماند؛ تونل خالی به‌عنوان اینترنت VPN گزارش نمی‌شود.
+- IPv6 به داخل رابط VPN route می‌شود تا از مسیر فیزیکی دور نزند؛ دسترسی واقعی IPv6 به پشتیبانی سرور از IPv6 وابسته است.
+- در محیط فعلی Android SDK/NDK و دسترسی مستقیم شبکه برای clone/build موجود نیست؛ بنابراین APK در این محیط کامپایل یا روی گوشی تست نشده است. اسکریپت `scripts/validate-android-port.py` فقط اتصال اجزای سورس را به‌صورت ایستا بررسی می‌کند و جایگزین build یا تست تونل زنده نیست. workflow در GitHub Actions برای کامپایل‌کردن پروژه تعریف شده است.
+
+## مجوزها
+
+ماژول بومی upstream تحت Apache-2.0 برای کد اصلی خودش منتشر شده؛ مجوزهای هر وابستگی باید همراه سورس دریافت‌شده حفظ شوند. قبل از انتشار APK، فایل‌های `LICENSE` و مجوزهای زیرماژول‌ها را همراه بسته نگه دارید. جزئیات در `THIRD_PARTY.md` است.

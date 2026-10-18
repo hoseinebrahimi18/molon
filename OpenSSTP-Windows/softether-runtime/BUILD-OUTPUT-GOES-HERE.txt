@@ -1,0 +1,6 @@
+The GitHub Actions workflow compiles the official SoftEther source and replaces this placeholder with:
+- vpnclient.exe
+- vpncmd.exe
+- hamcore.se2
+- SOFTETHER-LICENSE.txt
+The placeholder is not a runnable engine. Build the project using .github/workflows/build.yml before running the application.
