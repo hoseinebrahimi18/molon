@@ -19,6 +19,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -85,6 +86,9 @@ class SoftEtherVpnService : VpnService() {
         var inboundThread: Thread? = null
         var outboundThread: Thread? = null
         var statsThread: Thread? = null
+        // Byte counters measured at the packet bridge itself (independent of native stats).
+        val rxBytes = AtomicLong(0L)
+        val txBytes = AtomicLong(0L)
 
         try {
             client = SoftEtherClient()
@@ -181,21 +185,18 @@ class SoftEtherVpnService : VpnService() {
                     try { Thread.sleep(STATS_INTERVAL_MS) } catch (_: InterruptedException) { break }
                     if (!running || !connected) break
                     try {
-                        val counters = sessionClient.nativeGetStats(sessionHandle)
-                        if (counters != null && counters.size >= 4) {
-                            val now = SystemClock.elapsedRealtime()
-                            val elapsedMs = (now - previousTime).coerceAtLeast(1L)
-                            val currentTx = counters[1].coerceAtLeast(0L)
-                            val currentRx = counters[3].coerceAtLeast(0L)
-                            val txRate = if (currentTx >= previousTx) (currentTx - previousTx) * 1000L / elapsedMs else 0L
-                            val rxRate = if (currentRx >= previousRx) (currentRx - previousRx) * 1000L / elapsedMs else 0L
-                            previousTx = currentTx
-                            previousRx = currentRx
-                            previousTime = now
-                            publishTrafficRates(rxRate, txRate)
-                        }
+                        val now = SystemClock.elapsedRealtime()
+                        val elapsedMs = (now - previousTime).coerceAtLeast(1L)
+                        val currentTx = txBytes.get()
+                        val currentRx = rxBytes.get()
+                        val txRate = (currentTx - previousTx).coerceAtLeast(0L) * 1000L / elapsedMs
+                        val rxRate = (currentRx - previousRx).coerceAtLeast(0L) * 1000L / elapsedMs
+                        previousTx = currentTx
+                        previousRx = currentRx
+                        previousTime = now
+                        publishTrafficRates(rxRate, txRate)
                     } catch (e: Exception) {
-                        Log.w(TAG, "Native traffic statistics unavailable", e)
+                        Log.w(TAG, "Traffic statistics unavailable", e)
                     }
                 }
             }, "opensstp-softether-stats").apply { isDaemon = true }
@@ -208,7 +209,7 @@ class SoftEtherVpnService : VpnService() {
                     while (running) {
                         val count = sessionClient.nativeReceive(sessionHandle, buffer, buffer.size)
                         when {
-                            count > 0 -> output.write(buffer, 0, count)
+                            count > 0 -> { output.write(buffer, 0, count); rxBytes.addAndGet(count.toLong()) }
                             count == 0 -> Thread.sleep(RECEIVE_IDLE_SLEEP_MS)
                             else -> throw IOException("ارتباط داده‌ای SoftEther قطع شد.")
                         }
@@ -227,6 +228,7 @@ class SoftEtherVpnService : VpnService() {
                         if (count == 0) continue
                         val sent = sessionClient.nativeSendSlice(sessionHandle, buffer, 0, count)
                         if (sent != count) throw IOException("ارسال بسته به موتور SoftEther کامل نشد (sent=$sent, expected=$count).")
+                        txBytes.addAndGet(count.toLong())
                     }
                     if (running) throw IOException("ورودی تونل اندروید بسته شد.")
                 } catch (e: Exception) {
@@ -341,7 +343,11 @@ class SoftEtherVpnService : VpnService() {
 
     private fun formatRate(bytesPerSecond: Long): String {
         val safeRate = bytesPerSecond.coerceAtLeast(0L)
-        return if (safeRate < 1024L) "$safeRate B/s" else String.format(java.util.Locale.US, "%.1f KB/s", safeRate / 1024.0)
+        return when {
+            safeRate < 1024L -> "$safeRate B/s"
+            safeRate < 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f KB/s", safeRate / 1024.0)
+            else -> String.format(java.util.Locale.US, "%.2f MB/s", safeRate / 1048576.0)
+        }
     }
 
     private fun startAsForeground(text: String) {
