@@ -1,6 +1,8 @@
 package com.opensstp.android
 
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.ClipboardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,6 +13,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.VpnService
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.text.TextUtils
 import android.text.method.PasswordTransformationMethod
@@ -18,7 +21,9 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.EditText
@@ -29,6 +34,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -52,6 +58,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var configList: LinearLayout
     private var sessionCanBeStopped = false
     private var selectedConfig: String? = null
+    private lateinit var appPrefs: SharedPreferences
+    private lateinit var scroll: ScrollView
+    private lateinit var scrim: View
+    private lateinit var drawerPanel: LinearLayout
+    private lateinit var drawerStatus: TextView
+    private lateinit var drawerStatusDot: View
+    private lateinit var backCallback: OnBackPressedCallback
+    private var drawerOpen = false
+    private var drawerWidthPx = 0
 
     private class Field(val block: View, val edit: EditText)
 
@@ -83,6 +98,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = securePrefs()
+        appPrefs = prefs
+        backCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() = closeDrawer()
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -107,13 +127,13 @@ class MainActivity : ComponentActivity() {
         titles.addView(label("Open-SSTP", 21f, Ui.TEXT, bold = true, gravity = Gravity.LEFT))
         titles.addView(label("SOFTETHER VPN FOR ANDROID", 10f, Ui.MUTED, gravity = Gravity.LEFT).apply { letterSpacing = 0.1f })
         header.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val addConfigButton = FrameLayout(this).apply {
+        val menuButton = FrameLayout(this).apply {
             isClickable = true
-            contentDescription = "افزودن کانفیگ"
+            contentDescription = "منو"
             background = Ui.ripple(this@MainActivity, Ui.shape(this@MainActivity, Ui.CARD_HI, 14f, Ui.STROKE, 1f), 14f)
         }
-        addConfigButton.addView(IconView(this, IconKind.PLUS, Ui.ACCENT_SOFT), FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
-        header.addView(addConfigButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+        menuButton.addView(IconView(this, IconKind.MENU, Ui.ACCENT_SOFT), FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+        header.addView(menuButton, LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(header, match())
 
         // ───────── Hero orb + status ─────────
@@ -225,7 +245,7 @@ class MainActivity : ComponentActivity() {
             params(top = 14)
         )
 
-        val scroll = ScrollView(this).apply {
+        scroll = ScrollView(this).apply {
             isFillViewport = true
             background = android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
@@ -233,10 +253,25 @@ class MainActivity : ComponentActivity() {
             )
             addView(root)
         }
-        setContentView(scroll)
+
+        val frame = FrameLayout(this)
+        frame.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        scrim = View(this).apply {
+            setBackgroundColor(Color.argb(170, 2, 5, 11))
+            visibility = View.GONE
+            alpha = 0f
+            setOnClickListener { closeDrawer() }
+        }
+        frame.addView(scrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        drawerWidthPx = minOf((resources.displayMetrics.widthPixels * 0.84f).toInt(), dp(330))
+        drawerPanel = buildDrawer()
+        drawerPanel.translationX = drawerWidthPx.toFloat()
+        drawerPanel.visibility = View.INVISIBLE
+        frame.addView(drawerPanel, FrameLayout.LayoutParams(drawerWidthPx, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.RIGHT))
+        setContentView(frame)
 
         renderConfigs(prefs)
-        addConfigButton.setOnClickListener { promptSaveConfig(prefs) }
+        menuButton.setOnClickListener { openDrawer() }
         orb.setOnClickListener { connectButton.performClick() }
 
         remember.setOnCheckedChangeListener { _, checked ->
@@ -344,6 +379,11 @@ class MainActivity : ComponentActivity() {
             else -> Ui.TEXT2
         }
         status.setTextColor(color)
+        if (::drawerStatus.isInitialized) {
+            drawerStatus.text = message
+            drawerStatus.setTextColor(color)
+            drawerStatusDot.background = Ui.oval(color)
+        }
         pillDot.background = Ui.oval(color)
         pill.background = Ui.shape(this, Ui.alpha(color, 30), 22f, Ui.alpha(color, 90), 1f)
         orb.setState(state)
@@ -358,7 +398,7 @@ class MainActivity : ComponentActivity() {
         if (serverValue.isBlank()) {
             server.error = "اول آدرس سرور را وارد کنید"
             server.requestFocus()
-            Toast.makeText(this, "آدرس سرور را وارد کنید و دوباره + را بزنید.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "آدرس سرور را وارد کنید و دوباره «ذخیرهٔ کانفیگ» را بزنید.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -368,7 +408,7 @@ class MainActivity : ComponentActivity() {
             setText("کانفیگ ${readConfigs(prefs).length() + 1}")
         }
         AlertDialog.Builder(this)
-            .setTitle("افزودن کانفیگ")
+            .setTitle("ذخیرهٔ کانفیگ")
             .setMessage("اطلاعات فعلی سرور، نام کاربری و رمز عبور ذخیره می‌شود.")
             .setView(nameInput)
             .setNegativeButton("انصراف", null)
@@ -397,6 +437,295 @@ class MainActivity : ComponentActivity() {
                 selectedConfig = configName
                 renderConfigs(prefs)
                 Toast.makeText(this, "کانفیگ «$configName» ذخیره شد.", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    // ───────── Hamburger drawer ─────────
+
+    private fun openDrawer() {
+        if (drawerOpen) return
+        drawerOpen = true
+        backCallback.isEnabled = true
+        currentFocus?.clearFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+        scrim.visibility = View.VISIBLE
+        scrim.animate().alpha(1f).setDuration(220L).start()
+        drawerPanel.visibility = View.VISIBLE
+        drawerPanel.animate().translationX(0f).setDuration(280L)
+            .setInterpolator(DecelerateInterpolator()).start()
+    }
+
+    private fun closeDrawer() {
+        if (!drawerOpen) return
+        drawerOpen = false
+        backCallback.isEnabled = false
+        scrim.animate().alpha(0f).setDuration(200L).withEndAction {
+            if (!drawerOpen) scrim.visibility = View.GONE
+        }.start()
+        drawerPanel.animate().translationX(drawerWidthPx.toFloat()).setDuration(220L)
+            .setInterpolator(AccelerateInterpolator())
+            .withEndAction { if (!drawerOpen) drawerPanel.visibility = View.INVISIBLE }
+            .start()
+    }
+
+    private fun buildDrawer(): LinearLayout {
+        val r = dp(28).toFloat()
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            isClickable = true
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Ui.BG1, Ui.BG0)
+            ).apply {
+                cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+                setStroke(dp(1), Ui.STROKE)
+            }
+        }
+
+        // Header: logo, title, live connection state, close button
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(dp(20), dp(44), dp(16), dp(18))
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Ui.alpha(Ui.ACCENT, 70), Ui.alpha(Ui.ACCENT2, 34))
+            ).apply { cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, 0f, 0f) }
+        }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+        }
+        val logo = FrameLayout(this).apply {
+            background = Ui.gradient(this@MainActivity, Ui.ACCENT, Ui.ACCENT2, 14f, android.graphics.drawable.GradientDrawable.Orientation.TL_BR)
+        }
+        logo.addView(IconView(this, IconKind.SHIELD, Color.WHITE), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        top.addView(logo, LinearLayout.LayoutParams(dp(42), dp(42)))
+        val titles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+        }
+        titles.addView(label("Open-SSTP", 20f, Ui.TEXT, bold = true, gravity = Gravity.LEFT))
+        val ver = appVersion()
+        titles.addView(label(if (ver.isBlank()) "SOFTETHER VPN" else "SOFTETHER VPN  ·  v$ver", 10f, Ui.TEXT2, gravity = Gravity.LEFT).apply { letterSpacing = 0.08f })
+        top.addView(titles, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val closeButton = FrameLayout(this).apply {
+            isClickable = true
+            contentDescription = "بستن منو"
+            background = Ui.ripple(this@MainActivity, Ui.shape(this@MainActivity, Ui.alpha(Ui.BG0, 150), 14f, Ui.STROKE, 1f), 14f)
+            setOnClickListener { closeDrawer() }
+        }
+        closeButton.addView(IconView(this, IconKind.CLOSE, Ui.TEXT2), FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER))
+        top.addView(closeButton, LinearLayout.LayoutParams(dp(38), dp(38)))
+        head.addView(top, match())
+
+        drawerStatusDot = View(this).apply { background = Ui.oval(Ui.IDLE) }
+        drawerStatus = label("قطع است", 12f, Ui.TEXT2, bold = true, gravity = Gravity.LEFT).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = Ui.shape(this@MainActivity, Ui.alpha(Ui.BG0, 140), 14f, Ui.STROKE, 1f)
+        }
+        statusRow.addView(drawerStatusDot, LinearLayout.LayoutParams(dp(8), dp(8)))
+        statusRow.addView(drawerStatus, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+        head.addView(statusRow, params(top = 16))
+        panel.addView(head, match())
+
+        // Items
+        val items = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            setPadding(dp(12), dp(4), dp(12), dp(12))
+        }
+        items.addView(drawerSection("کانفیگ‌ها  ·  CONFIGS"), params(top = 12, bottom = 4))
+        items.addView(drawerItem(IconKind.SAVE, Ui.ACCENT_SOFT, "ذخیرهٔ کانفیگ فعلی", "Save current server & account") { promptSaveConfig(appPrefs) })
+        items.addView(drawerItem(IconKind.SERVER, Ui.CYAN, "کانفیگ‌های ذخیره‌شده", "Jump to saved configs") { showSavedConfigs() })
+        items.addView(drawerItem(IconKind.CLIPBOARD, Ui.GREEN, "وارد کردن از کلیپ‌بورد", "Paste server address") { importFromClipboard() })
+        items.addView(drawerItem(IconKind.SHARE, Ui.ACCENT2, "اشتراک‌گذاری سرور", "Share server & username (no password)") { shareServer() })
+
+        items.addView(drawerSection("سیستم  ·  SYSTEM"), params(top = 14, bottom = 4))
+        items.addView(drawerItem(IconKind.KEY, Ui.ACCENT_SOFT, "تنظیمات VPN اندروید", "Always-on VPN & lockdown") { openSystemScreen(Settings.ACTION_VPN_SETTINGS) })
+        items.addView(drawerItem(IconKind.BATTERY, Ui.AMBER, "بهینه‌سازی باتری", "Keep the tunnel alive in background") { openSystemScreen(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) })
+
+        items.addView(drawerSection("برنامه  ·  APP"), params(top = 14, bottom = 4))
+        items.addView(drawerItem(IconKind.HELP, Ui.CYAN, "راهنما", "How to connect") { showHelp() })
+        items.addView(drawerItem(IconKind.INFO, Ui.TEXT2, "دربارهٔ برنامه", "Version & licenses") { showAbout() })
+        items.addView(drawerItem(IconKind.TRASH, Ui.RED, "پاک‌کردن اطلاعات ذخیره‌شده", "Erase saved logins & configs", Ui.RED) { confirmClearData() })
+        items.addView(drawerItem(IconKind.EXIT, Ui.TEXT2, "بستن برنامه", "Close app (VPN keeps running)") { finish() })
+
+        val itemsScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            addView(items)
+        }
+        panel.addView(itemsScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        panel.addView(
+            label("Built-in SoftEther protocol engine", 10f, Ui.MUTED, gravity = Gravity.CENTER).apply {
+                setPadding(dp(12), dp(10), dp(12), dp(16))
+            },
+            match()
+        )
+        return panel
+    }
+
+    private fun drawerSection(title: String): TextView =
+        label(title, 10f, Ui.MUTED, bold = true).apply {
+            letterSpacing = 0.1f
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+
+    private fun drawerItem(
+        kind: IconKind,
+        color: Int,
+        title: String,
+        subtitle: String,
+        titleColor: Int = Ui.TEXT,
+        onClick: () -> Unit
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            isClickable = true
+            setPadding(dp(10), dp(9), dp(10), dp(9))
+            background = Ui.ripple(this@MainActivity, Ui.shape(this@MainActivity, Color.TRANSPARENT, 16f), 16f)
+            setOnClickListener {
+                closeDrawer()
+                onClick()
+            }
+        }
+        val badge = FrameLayout(this).apply { background = Ui.shape(this@MainActivity, Ui.alpha(color, 34), 12f) }
+        badge.addView(IconView(this, kind, color), FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+        row.addView(badge, LinearLayout.LayoutParams(dp(40), dp(40)))
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(label(title, 14f, titleColor, bold = true))
+        texts.addView(label(subtitle, 11f, Ui.MUTED, gravity = Gravity.RIGHT).apply {
+            textDirection = View.TEXT_DIRECTION_LTR
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+        }, params(top = 1))
+        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(12)
+            marginEnd = dp(8)
+        })
+        row.addView(IconView(this, IconKind.CHEVRON, Ui.MUTED), LinearLayout.LayoutParams(dp(16), dp(16)))
+        return row
+    }
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+
+    private fun showSavedConfigs() {
+        if (readConfigs(appPrefs).length() == 0) {
+            toast("هنوز کانفیگی ذخیره نشده است.")
+            return
+        }
+        scroll.post { scroll.smoothScrollTo(0, configList.top) }
+    }
+
+    private fun importFromClipboard() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val raw = clipboard?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(this)
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (raw.isBlank()) {
+            toast("کلیپ‌بورد خالی است.")
+            return
+        }
+        val firstToken = raw.lineSequence().first().trim().split(Regex("\\s+")).first()
+        val value = firstToken.substringAfter("://").substringBefore('/')
+        if (value.isBlank() || value.length > 255 || !value.matches(Regex("[A-Za-z0-9._:\\[\\]-]+"))) {
+            toast("متن کلیپ‌بورد شبیه آدرس سرور نیست.")
+            return
+        }
+        server.setText(value)
+        selectedConfig = null
+        renderConfigs(appPrefs)
+        toast("آدرس سرور از کلیپ‌بورد وارد شد.")
+    }
+
+    private fun shareServer() {
+        val serverValue = server.text.toString().trim()
+        if (serverValue.isBlank()) {
+            toast("اول آدرس سرور را وارد کنید.")
+            return
+        }
+        val text = "Open-SSTP\nServer: $serverValue\nUsername: ${username.text.toString().trim()}"
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        try {
+            startActivity(Intent.createChooser(send, "اشتراک‌گذاری سرور"))
+        } catch (_: ActivityNotFoundException) {
+            toast("برنامه‌ای برای اشتراک‌گذاری پیدا نشد.")
+        }
+    }
+
+    private fun openSystemScreen(action: String) {
+        try {
+            startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            toast("این صفحه روی این گوشی در دسترس نیست.")
+        }
+    }
+
+    private fun showHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("راهنما")
+            .setMessage(
+                "۱. آدرس سرور (مثلاً public-vpn-100.opengw.net یا host:port) را وارد کنید.\n" +
+                    "۲. برای سرورهای VPN Gate معمولاً نام کاربری vpn است و رمز عبور خالی می‌ماند.\n" +
+                    "۳. دکمهٔ بزرگ بالا یا «Connect» را بزنید و اجازهٔ VPN را تأیید کنید.\n" +
+                    "۴. برای استفادهٔ دوباره، از منو «ذخیرهٔ کانفیگ فعلی» را بزنید.\n" +
+                    "۵. اگر اتصال در پس‌زمینه قطع می‌شود، «بهینه‌سازی باتری» را از منو برای برنامه غیرفعال کنید."
+            )
+            .setPositiveButton("باشه", null)
+            .show()
+    }
+
+    private fun showAbout() {
+        val ver = appVersion()
+        AlertDialog.Builder(this)
+            .setTitle("Open-SSTP")
+            .setMessage(
+                "SoftEther VPN for Android" + (if (ver.isBlank()) "" else "\nنسخه: $ver") +
+                    "\n\nاتصال با موتور بومی پروتکل SoftEther و سرویس VpnService اندروید انجام می‌شود. " +
+                    "اطلاعات ورود فقط به‌صورت رمزگذاری‌شده روی همین دستگاه نگه‌داری می‌شود.\n\n" +
+                    "مجوز اجزای متن‌باز در فایل THIRD_PARTY.md پروژه آمده است."
+            )
+            .setPositiveButton("باشه", null)
+            .show()
+    }
+
+    private fun confirmClearData() {
+        AlertDialog.Builder(this)
+            .setTitle("پاک‌کردن اطلاعات")
+            .setMessage("همهٔ کانفیگ‌ها و اطلاعات ورود ذخیره‌شده حذف شوند؟ این کار برگشت‌پذیر نیست.")
+            .setNegativeButton("انصراف", null)
+            .setPositiveButton("پاک کن") { _, _ ->
+                appPrefs.edit().clear().apply()
+                selectedConfig = null
+                server.setText("")
+                username.setText("vpn")
+                password.setText("")
+                remember.isChecked = false
+                renderConfigs(appPrefs)
+                toast("اطلاعات ذخیره‌شده پاک شد.")
             }
             .show()
     }

@@ -35,6 +35,7 @@ object Ui {
     val GREEN = Color.parseColor("#2EE6A6")
     val CYAN = Color.parseColor("#4DD0FF")
     val RED = Color.parseColor("#FF6B7A")
+    val AMBER = Color.parseColor("#FFBE5A")
     val DANGER_A = Color.parseColor("#E5484D")
     val DANGER_B = Color.parseColor("#FF7A59")
     val CORE_TOP = Color.parseColor("#1E2B49")
@@ -78,7 +79,10 @@ object Ui {
     }
 }
 
-enum class IconKind { PLUS, CLOSE, ARROW_DOWN, ARROW_UP, SERVER, USER, LOCK, EYE, EYE_OFF, SHIELD }
+enum class IconKind {
+    PLUS, CLOSE, ARROW_DOWN, ARROW_UP, SERVER, USER, LOCK, EYE, EYE_OFF, SHIELD,
+    MENU, SAVE, CLIPBOARD, SHARE, KEY, BATTERY, TRASH, INFO, HELP, EXIT, CHEVRON
+}
 
 /** Tiny vector icon set drawn on a 24x24 grid, so no drawable resources are needed. */
 class IconView(context: Context, private var kind: IconKind, private var tint: Int) : View(context) {
@@ -152,6 +156,76 @@ class IconView(context: Context, private var kind: IconKind, private var tint: I
                 canvas.drawPath(p, paint)
                 canvas.drawCircle(12f, 12f, 3f, paint)
                 if (kind == IconKind.EYE_OFF) canvas.drawLine(4f, 4f, 20f, 20f, paint)
+            }
+            IconKind.MENU -> {
+                canvas.drawLine(4f, 6f, 20f, 6f, paint)
+                canvas.drawLine(10f, 12f, 20f, 12f, paint)
+                canvas.drawLine(4f, 18f, 20f, 18f, paint)
+            }
+            IconKind.SAVE -> {
+                rect.set(4f, 4f, 20f, 20f); canvas.drawRoundRect(rect, 2.5f, 2.5f, paint)
+                rect.set(8f, 4f, 16f, 9f); canvas.drawRect(rect, paint)
+                rect.set(7f, 14f, 17f, 20f); canvas.drawRect(rect, paint)
+            }
+            IconKind.CLIPBOARD -> {
+                rect.set(5f, 5f, 19f, 21f); canvas.drawRoundRect(rect, 2.5f, 2.5f, paint)
+                rect.set(9f, 3f, 15f, 7f); canvas.drawRoundRect(rect, 1.5f, 1.5f, paint)
+                canvas.drawLine(9f, 12f, 15f, 12f, paint)
+                canvas.drawLine(9f, 16f, 13f, 16f, paint)
+            }
+            IconKind.SHARE -> {
+                canvas.drawCircle(6f, 12f, 2.5f, paint)
+                canvas.drawCircle(18f, 6f, 2.5f, paint)
+                canvas.drawCircle(18f, 18f, 2.5f, paint)
+                canvas.drawLine(8.2f, 10.8f, 15.8f, 7.2f, paint)
+                canvas.drawLine(8.2f, 13.2f, 15.8f, 16.8f, paint)
+            }
+            IconKind.KEY -> {
+                canvas.drawCircle(8f, 15f, 4f, paint)
+                canvas.drawLine(11f, 12f, 20f, 3f, paint)
+                canvas.drawLine(16f, 7f, 19f, 10f, paint)
+            }
+            IconKind.BATTERY -> {
+                rect.set(3f, 7f, 19f, 17f); canvas.drawRoundRect(rect, 2.5f, 2.5f, paint)
+                canvas.drawLine(21.5f, 10.5f, 21.5f, 13.5f, paint)
+                paint.style = Paint.Style.FILL
+                rect.set(5.5f, 9.5f, 11f, 14.5f); canvas.drawRoundRect(rect, 1f, 1f, paint)
+            }
+            IconKind.TRASH -> {
+                canvas.drawLine(4f, 7f, 20f, 7f, paint)
+                canvas.drawLine(9f, 4f, 15f, 4f, paint)
+                val p = Path()
+                p.moveTo(6f, 7f); p.lineTo(7f, 20f); p.lineTo(17f, 20f); p.lineTo(18f, 7f)
+                canvas.drawPath(p, paint)
+                canvas.drawLine(10f, 11f, 10f, 16f, paint)
+                canvas.drawLine(14f, 11f, 14f, 16f, paint)
+            }
+            IconKind.INFO -> {
+                canvas.drawCircle(12f, 12f, 9f, paint)
+                canvas.drawLine(12f, 11f, 12f, 17f, paint)
+                paint.style = Paint.Style.FILL
+                canvas.drawCircle(12f, 7.5f, 1.2f, paint)
+            }
+            IconKind.HELP -> {
+                canvas.drawCircle(12f, 12f, 9f, paint)
+                rect.set(9f, 7f, 15f, 13f); canvas.drawArc(rect, 180f, 220f, false, paint)
+                canvas.drawLine(12f, 13f, 12f, 14.5f, paint)
+                paint.style = Paint.Style.FILL
+                canvas.drawCircle(12f, 17.5f, 1.2f, paint)
+            }
+            IconKind.EXIT -> {
+                val p = Path()
+                p.moveTo(10f, 4f); p.lineTo(5f, 4f); p.lineTo(5f, 20f); p.lineTo(10f, 20f)
+                canvas.drawPath(p, paint)
+                canvas.drawLine(9f, 12f, 20f, 12f, paint)
+                val head = Path()
+                head.moveTo(16f, 8f); head.lineTo(20f, 12f); head.lineTo(16f, 16f)
+                canvas.drawPath(head, paint)
+            }
+            IconKind.CHEVRON -> {
+                val p = Path()
+                p.moveTo(15f, 6f); p.lineTo(9f, 12f); p.lineTo(15f, 18f)
+                canvas.drawPath(p, paint)
             }
             IconKind.SHIELD -> {
                 val p = Path()
