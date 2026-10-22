@@ -41,6 +41,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var server: EditText
@@ -67,6 +68,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var backCallback: OnBackPressedCallback
     private var drawerOpen = false
     private var drawerWidthPx = 0
+    private val pingExecutor = Executors.newFixedThreadPool(3)
+    private val pingCache = HashMap<String, PingProbe.Result>()
+    private val pingInFlight = HashSet<String>()
 
     private class Field(val block: View, val edit: EditText)
 
@@ -745,6 +749,17 @@ class MainActivity : ComponentActivity() {
         if (configs.length() == 0) return
 
         configList.addView(sectionHeader("کانفیگ‌های ذخیره‌شده", configs.length().toString()), params(bottom = 4))
+        configList.addView(
+            label("↻ سنجش دوبارهٔ پینگ (TCP واقعی)", 12f, Ui.ACCENT_SOFT, bold = true).apply {
+                setPadding(dp(4), dp(6), dp(4), dp(2))
+                isClickable = true
+                setOnClickListener { for (i in 0 until configs.length()) configs.optJSONObject(i)?.let { startPing(it.optString("server", ""), force = true) } }
+            }
+        )
+        for (i in 0 until configs.length()) {
+            val srv = configs.optJSONObject(i)?.optString("server", "") ?: ""
+            if (srv.isNotBlank() && !pingCache.containsKey(srv)) startPing(srv)
+        }
 
         for (i in 0 until configs.length()) {
             val item = configs.optJSONObject(i) ?: continue
@@ -800,6 +815,9 @@ class MainActivity : ComponentActivity() {
             }, params(top = 2))
             row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
 
+            val pingView = pingLabel(configServer)
+            row.addView(pingView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+
             val deleteButton = FrameLayout(this).apply {
                 isClickable = true
                 contentDescription = "حذف $configName"
@@ -827,6 +845,60 @@ class MainActivity : ComponentActivity() {
 
             configList.addView(row, params(top = 8))
         }
+    }
+
+    private fun pingLabel(serverValue: String): TextView {
+        val result = pingCache[serverValue]
+        val (text, color) = when {
+            result is PingProbe.Result.Ok -> {
+                val c = when {
+                    result.medianMs < 150 -> Ui.GREEN
+                    result.medianMs < 400 -> Ui.AMBER
+                    else -> Ui.RED
+                }
+                "${result.medianMs} ms" to c
+            }
+            result is PingProbe.Result.Failed -> result.reason to Ui.RED
+            pingInFlight.contains(serverValue) -> "…" to Ui.MUTED
+            else -> "—" to Ui.MUTED
+        }
+        return label(text, 13f, color, bold = true, gravity = Gravity.CENTER).apply {
+            textDirection = View.TEXT_DIRECTION_LTR
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = Ui.shape(this@MainActivity, Ui.alpha(color, 30), 10f)
+            isClickable = true
+            if (result is PingProbe.Result.Ok) {
+                contentDescription = "کمینه ${result.minMs} میلی‌ثانیه، ${result.received} از ${result.sent} بسته پاسخ داد"
+            }
+            setOnClickListener { startPing(serverValue, force = true) }
+        }
+    }
+
+    private fun startPing(serverValue: String, force: Boolean = false) {
+        if (serverValue.isBlank()) return
+        if (pingInFlight.contains(serverValue)) return
+        if (!force && pingCache.containsKey(serverValue)) return
+        pingInFlight.add(serverValue)
+        pingCache.remove(serverValue)
+        val appContext = applicationContext
+        pingExecutor.execute {
+            val result = try {
+                PingProbe.measure(appContext, serverValue)
+            } catch (e: Exception) {
+                PingProbe.Result.Failed("خطا")
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                pingInFlight.remove(serverValue)
+                pingCache[serverValue] = result
+                renderConfigs(appPrefs)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        pingExecutor.shutdownNow()
+        super.onDestroy()
     }
 
     private fun securePrefs() = EncryptedSharedPreferences.create(
